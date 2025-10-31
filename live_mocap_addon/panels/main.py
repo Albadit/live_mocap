@@ -22,14 +22,14 @@ class MOCAP_PT_MainPanel(Panel):
         # ========== Armature Mapping Section ==========
         self.draw_armature_mapping_section(layout, settings)
         
+        # ========== MediaPipe Settings Section ==========
+        self.draw_mediapipe_settings_section(layout, settings)
+        
         # ========== Capture Section ==========
         self.draw_capture_section(layout, settings, context)
         
         # ========== Record Section ==========
         self.draw_record_section(layout, settings)
-        
-        # ========== Filters Section ==========
-        self.draw_filters_section(layout, settings)
     
     def draw_armature_mapping_section(self, layout, settings):
         """Draw the Armature Mapping section."""
@@ -83,6 +83,38 @@ class MOCAP_PT_MainPanel(Panel):
                 row.operator("mocap.save_bone_map", icon='EXPORT')
                 row.operator("mocap.load_bone_map", icon='IMPORT')
     
+    def draw_mediapipe_settings_section(self, layout, settings):
+        """Draw the MediaPipe Advanced Settings section."""
+        box = layout.box()
+        box.label(text="MediaPipe Settings", icon='SETTINGS')
+        
+        row = box.row()
+        row.prop(settings, "mp_delegate")
+        
+        row = box.row()
+        row.prop(settings, "mp_model_complexity")
+        
+        row = box.row()
+        row.prop(settings, "mp_num_poses")
+        
+        box.separator()
+        box.label(text="Confidence Thresholds:", icon='SHADERFX')
+
+        row = box.row()
+        row.prop(settings, "mp_min_detection_confidence", slider=True)
+        
+        row = box.row()
+        row.prop(settings, "mp_min_presence_confidence", slider=True)
+        
+        row = box.row()
+        row.prop(settings, "mp_min_tracking_confidence", slider=True)
+        
+        box.separator()
+        box.label(text="Smoothing:", icon='SMOOTHCURVE')
+        
+        row = box.row()
+        row.prop(settings, "smoothing", slider=True)
+
     def draw_capture_section(self, layout, settings, context):
         """Draw the Capture section."""
         from ..runtime import dependency_check
@@ -163,17 +195,3 @@ class MOCAP_PT_MainPanel(Panel):
         if settings.is_recording:
             row = box.row()
             row.label(text=f"Frames: {settings.recorded_frames}", icon='KEYFRAME')
-    
-    def draw_filters_section(self, layout, settings):
-        """Draw the Filters section."""
-        box = layout.box()
-        box.label(text="Filters", icon='FILTER')
-        
-        row = box.row()
-        row.prop(settings, "smoothing", slider=True)
-        
-        row = box.row()
-        row.prop(settings, "min_confidence", slider=True)
-        
-        row = box.row()
-        row.prop(settings, "foot_lock_threshold", slider=True)

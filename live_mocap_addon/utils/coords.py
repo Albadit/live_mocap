@@ -71,12 +71,12 @@ def mediapipe_to_blender(mp_x: float, mp_y: float, mp_z: float,
     Convert MediaPipe normalized coordinates to Blender space.
     
     MediaPipe uses:
-    - x: [0, 1] left to right (0.5 is center)
+    - x: [0, 1] left to right (0.5 is center) - FROM CAMERA VIEW
     - y: [0, 1] top to bottom (0.5 is center)
     - z: depth (relative scale, can be negative)
     
     Blender uses:
-    - X: left to right
+    - X: left to right (MIRROR from camera for natural movement)
     - Y: depth (forward/back)
     - Z: up/down
     
@@ -90,10 +90,11 @@ def mediapipe_to_blender(mp_x: float, mp_y: float, mp_z: float,
     Returns:
         Position in Blender coordinate space
     """
-    # Center the coordinates
-    x = (mp_x - 0.5) * scale
+    # Mirror X axis so movements match (right hand moves right)
+    # Invert Y to Z mapping (MediaPipe Y increases downward, Blender Z increases upward)
+    x = -(mp_x - 0.5) * scale  # MIRRORED for natural movement
     y = -mp_z * scale  # Depth becomes Y
-    z = -(mp_y - 0.5) * scale + z_offset  # Flip Y to Z, add offset
+    z = (mp_y - 0.5) * scale + z_offset  # Flip Y to Z (inverted), add offset
     
     return Vector((x, y, z))
 

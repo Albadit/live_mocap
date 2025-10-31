@@ -144,8 +144,8 @@ LANDMARK_CHAINS = {
 def auto_map_bones(armature_bones: List[str]) -> Dict[str, Dict[str, str]]:
     """
     Automatically map MediaPipe landmarks to armature bones.
-    First checks for exact matches from the candidate patterns,
-    then falls back to fuzzy matching if no exact match is found.
+    Only uses exact matches from the candidate patterns.
+    If no exact match is found, leaves the bone empty.
     Skips entries with empty/None landmarks.
     
     Args:
@@ -170,22 +170,18 @@ def auto_map_bones(armature_bones: List[str]) -> Dict[str, Dict[str, str]]:
         if not candidate_patterns:
             continue
         
-        # First, check for exact matches
+        # Only check for exact matches, no fuzzy matching
         matched_bone = None
         for pattern in candidate_patterns:
             if pattern in armature_bones:
                 matched_bone = pattern
                 break
         
-        # If no exact match, use fuzzy matching
-        if not matched_bone:
-            matched_bone = find_bone_in_armature(armature_bones, candidate_patterns)
-        
-        if matched_bone:
-            mapping[rig_bone_name] = {
-                "landmark": landmark_name,
-                "bone": matched_bone
-            }
+        # Add to mapping with the landmark, even if bone is not found (will be None)
+        mapping[rig_bone_name] = {
+            "landmark": landmark_name,
+            "bone": matched_bone  # None if no exact match found
+        }
     
     return mapping
 

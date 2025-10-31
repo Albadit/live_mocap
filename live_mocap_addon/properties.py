@@ -159,6 +159,64 @@ class MOCAP_PG_Settings(PropertyGroup):
         default="Ready"
     )
     
+    # ========== MediaPipe Advanced Settings ==========
+    mp_delegate: EnumProperty(
+        name="Inference Delegate",
+        description="Hardware acceleration delegate for MediaPipe inference",
+        items=[
+            ('CPU', "CPU", "Use CPU for inference (slowest, most compatible)"),
+            ('GPU', "GPU", "Use GPU acceleration (faster, requires compatible GPU)"),
+            ('XNNPACK', "XNNPACK", "Use XNNPACK delegate (optimized CPU, default)"),
+        ],
+        default='GPU'
+    )
+    
+    mp_model_complexity: EnumProperty(
+        name="Model Complexity",
+        description="Model complexity level (higher = more accurate but slower)",
+        items=[
+            ('0', "Lite (0)", "Lightweight model, fastest inference"),
+            ('1', "Full (1)", "Full model, balanced speed and accuracy"),
+            ('2', "Heavy (2)", "Heavy model, most accurate but slowest"),
+        ],
+        default='2'
+    )
+    
+    mp_num_poses: IntProperty(
+        name="Demo Num Poses",
+        description="Maximum number of poses to detect (1-10)",
+        default=1,
+        min=1,
+        max=10
+    )
+    
+    mp_min_detection_confidence: FloatProperty(
+        name="Minimum Pose Detection Confidence",
+        description="Minimum confidence for pose detection (initial detection)",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        precision=2
+    )
+    
+    mp_min_presence_confidence: FloatProperty(
+        name="Minimum Pose Presence Confidence",
+        description="Minimum confidence for pose presence (landmark visibility)",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        precision=2
+    )
+    
+    mp_min_tracking_confidence: FloatProperty(
+        name="Minimum Tracking Confidence",
+        description="Minimum confidence for pose tracking (between frames)",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        precision=2
+    )
+    
     # ========== Filters ==========
     smoothing: FloatProperty(
         name="Smoothing",

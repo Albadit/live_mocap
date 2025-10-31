@@ -181,6 +181,7 @@ def draw_landmarks_2d():
         
         # Prepare vertices for landmarks
         landmark_positions = []
+        landmark_depths = []  # Store z-depth for size scaling
         landmarks_in_bounds = []  # Track which landmarks are visible
         
         # Handle different landmark container types
@@ -191,11 +192,16 @@ def draw_landmarks_2d():
                 x = margin + (landmark.x * feed_width)
                 y = margin + ((1.0 - landmark.y) * feed_height)  # Flip Y
                 
+                # Store depth (z-coordinate) for size scaling
+                # MediaPipe z is negative when further from camera
+                z_depth = landmark.z if hasattr(landmark, 'z') else 0.0
+                
                 # Clamp coordinates to stay within the viewport box
                 x = max(margin, min(x, margin + feed_width))
                 y = max(margin, min(y, margin + feed_height))
                 
                 landmark_positions.append((x, y))
+                landmark_depths.append(z_depth)
                 
                 # Check if landmark is within original bounds (before clamping)
                 original_x = margin + (landmark.x * feed_width)
@@ -229,26 +235,67 @@ def draw_landmarks_2d():
                 gpu.state.line_width_set(2.0)
                 
                 shader.bind()
-                shader.uniform_float("color", (0.0, 1.0, 0.0, 0.7))  # Green lines
+                shader.uniform_float("color", (1.0, 1.0, 1.0, 0.9))  # White lines
                 batch.draw(shader)
                 
                 gpu.state.blend_set('NONE')
         
-        # Draw landmarks (points)
+        # Draw landmarks (points) with depth-based sizing
         # Only draw landmarks that are within bounds
-        if landmark_positions and landmarks_in_bounds:
-            visible_landmarks = [pos for pos, in_bounds in zip(landmark_positions, landmarks_in_bounds) if in_bounds]
+        if landmark_positions and landmarks_in_bounds and landmark_depths:
+            # Find min/max depth among visible landmarks
+            visible_data = [(pos, depth) for pos, in_bounds, depth in 
+                           zip(landmark_positions, landmarks_in_bounds, landmark_depths) if in_bounds]
             
-            if visible_landmarks:
-                shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-                batch = batch_for_shader(shader, 'POINTS', {"pos": visible_landmarks})
+            if visible_data:
+                visible_landmarks = [item[0] for item in visible_data]
+                visible_depths = [item[1] for item in visible_data]
                 
+                # Normalize depths - MediaPipe z is usually in range [-1, 1]
+                # Smaller z (more negative) = further away
+                # Larger z (less negative/positive) = closer
+                min_depth = min(visible_depths)
+                max_depth = max(visible_depths)
+                depth_range = max_depth - min_depth if abs(max_depth - min_depth) > 0.01 else 1.0
+                
+                print(f"DEBUG: Depth range: {min_depth:.3f} to {max_depth:.3f}, range: {depth_range:.3f}")
+                
+                # Enable smooth round points
                 gpu.state.blend_set('ALPHA')
-                gpu.state.point_size_set(5.0)
                 
-                shader.bind()
-                shader.uniform_float("color", (1.0, 0.0, 0.0, 0.9))  # Red points
-                batch.draw(shader)
+                shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+                
+                # Draw each landmark individually with depth-based size
+                for i, (pos, depth) in enumerate(zip(visible_landmarks, visible_depths)):
+                    # Calculate size based on depth (closer = larger)
+                    # Normalize depth to 0-1 range
+                    if depth_range > 0.01:
+                        normalized_depth = (depth - min_depth) / depth_range
+                    else:
+                        normalized_depth = 0.5
+                    
+                    # Invert so closer (LOWER/more negative z) = larger size
+                    # MediaPipe: more negative z = further away, less negative/positive = closer
+                    size_scale = 1.0 - normalized_depth  # INVERTED: 1 = furthest (small), 0 = closest (large)
+                    
+                    # Size range: 5-10 pixels (closer = 10px, further = 5px)
+                    dot_size = 5.0 + (size_scale * 5.0)
+                    
+                    if i == 0:  # Debug first landmark
+                        print(f"DEBUG: Landmark 0 - depth: {depth:.3f}, normalized: {normalized_depth:.3f}, size: {dot_size:.1f}px")
+                    
+                    # Create a small circle for each point (simulate round point)
+                    # Draw multiple circles with decreasing alpha for smooth appearance
+                    for layer in range(3):
+                        layer_size = dot_size - (layer * 2)
+                        if layer_size > 0:
+                            batch = batch_for_shader(shader, 'POINTS', {
+                                "pos": [pos],
+                                "color": [(0.0, 1.0, 0.0, 1.0 - (layer * 0.2))]  # Green with fade
+                            })
+                            gpu.state.point_size_set(layer_size)
+                            shader.bind()
+                            batch.draw(shader)
                 
                 gpu.state.blend_set('NONE')
         

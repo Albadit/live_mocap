@@ -185,7 +185,10 @@ class MOCAP_OT_CaptureStart(Operator):
         armature = settings.target_armature
         
         if not armature or armature.type != 'ARMATURE':
+            print(f"DEBUG: No armature or wrong type: armature={armature}, type={armature.type if armature else None}")
             return
+        
+        print(f"DEBUG: Retargeting to armature '{armature.name}' with {len(settings.bone_mappings)} mappings")
         
         # Convert to positions
         positions = landmarks_to_positions(
@@ -212,18 +215,24 @@ class MOCAP_OT_CaptureStart(Operator):
             landmark_positions["SPINE_PROXY"] = spine_pos
         
         # Apply to bones
+        bones_updated = 0
         for mapping in settings.bone_mappings:
             if not mapping.enabled or not mapping.bone_name:
+                print(f"DEBUG: Skipping mapping - enabled={mapping.enabled}, bone_name={mapping.bone_name}")
                 continue
             
             if mapping.bone_name not in armature.pose.bones:
+                print(f"DEBUG: Bone '{mapping.bone_name}' not found in armature")
                 continue
             
             bone = armature.pose.bones[mapping.bone_name]
             landmark_name = mapping.landmark_name
             
             if landmark_name not in landmark_positions:
+                print(f"DEBUG: Landmark '{landmark_name}' not found in landmark_positions")
                 continue
+            
+            print(f"DEBUG: Updating bone '{mapping.bone_name}' with landmark '{landmark_name}'")
             
             position = landmark_positions[landmark_name]
             
@@ -238,8 +247,8 @@ class MOCAP_OT_CaptureStart(Operator):
             if position is None:
                 continue
             
-            # Set location
-            bone.location = position
+            # ROTATION ONLY - Do not set location to prevent bone stretching
+            # bone.location = position  # DISABLED - causes stretching
             
             # Compute rotation from chain
             next_landmark = get_next_landmark_in_chain(landmark_name)
@@ -247,17 +256,25 @@ class MOCAP_OT_CaptureStart(Operator):
                 end_pos = landmark_positions[next_landmark]
                 rotation = compute_bone_rotation_from_chain(position, end_pos)
                 
-                # Apply filter
-                if mapping.bone_name in self._filters:
-                    rotation = self._filters[mapping.bone_name].filter_rotation(rotation, confidence)
-                
                 if rotation:
+                    # Apply smoothing only (skip confidence gate to avoid slerp error)
+                    if mapping.bone_name in self._filters:
+                        try:
+                            rotation = self._filters[mapping.bone_name].smoothing.filter(rotation)
+                        except Exception as e:
+                            print(f"DEBUG: Filter error for {mapping.bone_name}: {e}")
+                    
+                    # Set rotation only
                     bone.rotation_quaternion = rotation
+                    bones_updated += 1
+                    print(f"DEBUG: Set rotation for '{mapping.bone_name}'")
             
             # Insert keyframes if recording
             if settings.is_recording:
-                bone.keyframe_insert(data_path="location", frame=context.scene.frame_current)
+                # Only keyframe rotation, not location
                 bone.keyframe_insert(data_path="rotation_quaternion", frame=context.scene.frame_current)
+        
+        print(f"DEBUG: Updated {bones_updated} bones this frame")
         
         # Advance frame if recording
         if settings.is_recording:
