@@ -15,7 +15,9 @@ from ..utils.logging_utils import get_logger
 _draw_handler = None
 _camera_texture = None
 _current_frame = None
-_current_landmarks = None
+_current_pose_landmarks = None
+_current_hand_landmarks = None
+_current_face_landmarks = None
 
 
 def create_camera_texture(width, height):
@@ -68,15 +70,19 @@ def update_camera_frame(frame):
         logger.error(f"Failed to update camera frame: {str(e)}")
 
 
-def update_landmarks(landmarks):
+def update_landmarks(pose_landmarks=None, hand_landmarks=None, face_landmarks=None):
     """
     Update the landmarks to draw.
     
     Args:
-        landmarks: MediaPipe landmarks object
+        pose_landmarks: MediaPipe pose landmarks object
+        hand_landmarks: MediaPipe hand landmarks list
+        face_landmarks: MediaPipe face landmarks list
     """
-    global _current_landmarks
-    _current_landmarks = landmarks
+    global _current_pose_landmarks, _current_hand_landmarks, _current_face_landmarks
+    _current_pose_landmarks = pose_landmarks
+    _current_hand_landmarks = hand_landmarks
+    _current_face_landmarks = face_landmarks
 
 
 def draw_camera_feed():
@@ -152,18 +158,15 @@ def draw_camera_feed():
         logger.error(f"Failed to draw camera feed: {str(e)}")
 
 
-def draw_landmarks_2d():
-    """Draw MediaPipe landmarks as 2D overlay."""
-    global _current_landmarks, _camera_texture
+def draw_pose_landmarks_2d():
+    """Draw MediaPipe pose landmarks as 2D overlay with depth-based sizing."""
+    global _current_pose_landmarks, _camera_texture
     
-    if _current_landmarks is None:
+    if _current_pose_landmarks is None:
         return
     
     try:
-        from ..runtime.trackers import POSE_CONNECTIONS
-        
-        # Get viewport dimensions
-        region = bpy.context.region
+        from ..runtime.trackers import POSE_CONNECTIONS, DISABLED_POSE_LANDMARKS, DEPTH_CONFIG, DRAW_CONFIG
         
         # Camera feed dimensions - match the feed size
         # Use camera's aspect ratio if available
@@ -179,129 +182,303 @@ def draw_landmarks_2d():
         feed_width = int(feed_height * aspect_ratio)
         margin = 10
         
-        # Prepare vertices for landmarks
+        # Prepare vertices for landmarks - single pass
         landmark_positions = []
-        landmark_depths = []  # Store z-depth for size scaling
-        landmarks_in_bounds = []  # Track which landmarks are visible
+        landmark_depths = []
+        visible_indices = []  # Only store indices of visible landmarks
         
-        # Handle different landmark container types
-        # MediaPipe returns RepeatedCompositeContainer which is iterable
         try:
-            for idx, landmark in enumerate(_current_landmarks):
+            for idx, landmark in enumerate(_current_pose_landmarks):
+                # Skip disabled landmarks early
+                if idx in DISABLED_POSE_LANDMARKS:
+                    landmark_positions.append(None)
+                    landmark_depths.append(0)
+                    continue
+                
+                # Skip if not visible enough
+                visibility = landmark.visibility if hasattr(landmark, 'visibility') else 1.0
+                if visibility < 0.5:
+                    landmark_positions.append(None)
+                    landmark_depths.append(0)
+                    continue
+                
                 # Convert normalized coordinates to screen space
                 x = margin + (landmark.x * feed_width)
-                y = margin + ((1.0 - landmark.y) * feed_height)  # Flip Y
+                y = margin + ((1.0 - landmark.y) * feed_height)
                 
-                # Store depth (z-coordinate) for size scaling
-                # MediaPipe z is negative when further from camera
+                # Check bounds before clamping (faster)
+                if not (margin <= x <= margin + feed_width and margin <= y <= margin + feed_height):
+                    landmark_positions.append(None)
+                    landmark_depths.append(0)
+                    continue
+                
                 z_depth = landmark.z if hasattr(landmark, 'z') else 0.0
-                
-                # Clamp coordinates to stay within the viewport box
-                x = max(margin, min(x, margin + feed_width))
-                y = max(margin, min(y, margin + feed_height))
                 
                 landmark_positions.append((x, y))
                 landmark_depths.append(z_depth)
-                
-                # Check if landmark is within original bounds (before clamping)
-                original_x = margin + (landmark.x * feed_width)
-                original_y = margin + ((1.0 - landmark.y) * feed_height)
-                is_in_bounds = (margin <= original_x <= margin + feed_width and 
-                               margin <= original_y <= margin + feed_height)
-                landmarks_in_bounds.append(is_in_bounds)
+                visible_indices.append(idx)
                 
         except (TypeError, AttributeError) as e:
             print(f"ERROR: Cannot iterate landmarks: {e}")
             return
         
-        # Draw connections (lines)
-        # Only draw connections where both landmarks are visible (within original bounds)
-        if len(landmark_positions) > 0:
+        if not visible_indices:
+            return
+        
+        # Filter connections to exclude disabled landmarks - build once
+        line_vertices = []
+        for connection in POSE_CONNECTIONS:
+            idx1, idx2 = connection[0], connection[1]
+            if (idx1 not in DISABLED_POSE_LANDMARKS and idx2 not in DISABLED_POSE_LANDMARKS and
+                idx1 < len(landmark_positions) and idx2 < len(landmark_positions) and
+                landmark_positions[idx1] is not None and landmark_positions[idx2] is not None):
+                line_vertices.append(landmark_positions[idx1])
+                line_vertices.append(landmark_positions[idx2])
+        
+        # Draw all connections in one batch
+        if line_vertices:
+            shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+            batch = batch_for_shader(shader, 'LINES', {"pos": line_vertices})
+            
+            gpu.state.blend_set('ALPHA')
+            gpu.state.line_width_set(DRAW_CONFIG['pose']['connection']['thickness'])
+            
+            shader.bind()
+            color = tuple(c / 255.0 for c in DRAW_CONFIG['pose']['connection']['color']) + (0.9,)
+            shader.uniform_float("color", color)
+            batch.draw(shader)
+            gpu.state.blend_set('NONE')
+        
+        # Draw landmarks with depth-based sizing - batch by size for efficiency
+        if visible_indices:
+            # Calculate depth normalization once
+            visible_depths = [landmark_depths[idx] for idx in visible_indices]
+            z_min = min(visible_depths)
+            z_max = max(visible_depths)
+            z_range = z_max - z_min if z_max != z_min else 1
+            
+            # Get config values once
+            radius_min, radius_max = DEPTH_CONFIG['radius_range']
+            landmark_color = DRAW_CONFIG['pose']['landmark']['color']
+            color = tuple(c / 255.0 for c in landmark_color) + (1.0,)
+            
+            gpu.state.blend_set('ALPHA')
+            shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+            shader.bind()
+            
+            # Group landmarks by size (3 size categories for batching)
+            size_groups = [[], [], []]  # small, medium, large
+            
+            for idx in visible_indices:
+                pos = landmark_positions[idx]
+                depth = landmark_depths[idx]
+                
+                # Normalize z value
+                normalized_z = 1 - ((depth - z_min) / z_range)
+                circle_radius = (radius_min + (normalized_z * (radius_max - radius_min))) * 2
+                
+                # Categorize by size
+                if circle_radius < 6:
+                    size_groups[0].append(pos)
+                elif circle_radius < 10:
+                    size_groups[1].append(pos)
+                else:
+                    size_groups[2].append(pos)
+            
+            # Draw each size group in batch
+            sizes = [4, 8, 12]
+            for group_idx, positions in enumerate(size_groups):
+                if positions:
+                    colors = [color] * len(positions)
+                    batch = batch_for_shader(shader, 'POINTS', {
+                        "pos": positions,
+                        "color": colors
+                    })
+                    gpu.state.point_size_set(sizes[group_idx])
+                    batch.draw(shader)
+            
+            gpu.state.blend_set('NONE')
+        
+    except Exception as e:
+        logger = get_logger()
+        logger.error(f"Failed to draw pose landmarks: {str(e)}")
+
+
+def draw_hand_landmarks_2d():
+    """Draw MediaPipe hand landmarks as 2D overlay."""
+    global _current_hand_landmarks, _camera_texture
+    
+    if _current_hand_landmarks is None:
+        return
+    
+    try:
+        from ..runtime.dependency_check import safe_import_mediapipe
+        mp = safe_import_mediapipe()
+        if mp is None:
+            return
+        
+        from ..runtime.trackers import DRAW_CONFIG
+        
+        # Get viewport dimensions
+        if _camera_texture and 'width' in _camera_texture and 'height' in _camera_texture:
+            cam_width = _camera_texture['width']
+            cam_height = _camera_texture['height']
+            aspect_ratio = cam_width / cam_height if cam_height > 0 else 4/3
+        else:
+            aspect_ratio = 4 / 3
+        
+        feed_height = 240
+        feed_width = int(feed_height * aspect_ratio)
+        margin = 10
+        
+        # Pre-calculate hand connections once
+        hand_connections = mp.solutions.hands.HAND_CONNECTIONS
+        
+        # Draw each hand
+        for hand_idx, hand_landmarks in enumerate(_current_hand_landmarks):
+            # Determine if left or right hand
+            config_key = 'left_hand' if hand_idx % 2 == 0 else 'right_hand'
+            
+            landmark_positions = []
+            try:
+                for landmark in hand_landmarks.landmark:
+                    x = margin + (landmark.x * feed_width)
+                    y = margin + ((1.0 - landmark.y) * feed_height)
+                    # Only add if within bounds
+                    if margin <= x <= margin + feed_width and margin <= y <= margin + feed_height:
+                        landmark_positions.append((x, y))
+                    else:
+                        landmark_positions.append(None)
+            except (TypeError, AttributeError):
+                continue
+            
+            if not any(landmark_positions):
+                continue
+            
+            # Draw hand connections in one batch
             line_vertices = []
-            for connection in POSE_CONNECTIONS:
+            for connection in hand_connections:
                 idx1, idx2 = connection[0], connection[1]
                 if (idx1 < len(landmark_positions) and idx2 < len(landmark_positions) and
-                    idx1 < len(landmarks_in_bounds) and idx2 < len(landmarks_in_bounds)):
-                    # Only draw line if both endpoints are within bounds
-                    if landmarks_in_bounds[idx1] and landmarks_in_bounds[idx2]:
-                        line_vertices.append(landmark_positions[idx1])
-                        line_vertices.append(landmark_positions[idx2])
+                    landmark_positions[idx1] is not None and landmark_positions[idx2] is not None):
+                    line_vertices.append(landmark_positions[idx1])
+                    line_vertices.append(landmark_positions[idx2])
             
             if line_vertices:
                 shader = gpu.shader.from_builtin('UNIFORM_COLOR')
                 batch = batch_for_shader(shader, 'LINES', {"pos": line_vertices})
-                
                 gpu.state.blend_set('ALPHA')
-                gpu.state.line_width_set(2.0)
-                
+                gpu.state.line_width_set(DRAW_CONFIG[config_key]['connection']['thickness'])
                 shader.bind()
-                shader.uniform_float("color", (1.0, 1.0, 1.0, 0.9))  # White lines
+                color = tuple(c / 255.0 for c in DRAW_CONFIG[config_key]['connection']['color']) + (0.9,)
+                shader.uniform_float("color", color)
                 batch.draw(shader)
-                
                 gpu.state.blend_set('NONE')
-        
-        # Draw landmarks (points) with depth-based sizing
-        # Only draw landmarks that are within bounds
-        if landmark_positions and landmarks_in_bounds and landmark_depths:
-            # Find min/max depth among visible landmarks
-            visible_data = [(pos, depth) for pos, in_bounds, depth in 
-                           zip(landmark_positions, landmarks_in_bounds, landmark_depths) if in_bounds]
             
-            if visible_data:
-                visible_landmarks = [item[0] for item in visible_data]
-                visible_depths = [item[1] for item in visible_data]
-                
-                # Normalize depths - MediaPipe z is usually in range [-1, 1]
-                # Smaller z (more negative) = further away
-                # Larger z (less negative/positive) = closer
-                min_depth = min(visible_depths)
-                max_depth = max(visible_depths)
-                depth_range = max_depth - min_depth if abs(max_depth - min_depth) > 0.01 else 1.0
-                
-                print(f"DEBUG: Depth range: {min_depth:.3f} to {max_depth:.3f}, range: {depth_range:.3f}")
-                
-                # Enable smooth round points
+            # Draw hand landmarks in one batch
+            valid_positions = [pos for pos in landmark_positions if pos is not None]
+            if valid_positions:
                 gpu.state.blend_set('ALPHA')
-                
                 shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+                shader.bind()
+                landmark_color = DRAW_CONFIG[config_key]['landmark']['color']
+                color = tuple(c / 255.0 for c in landmark_color) + (1.0,)
+                colors = [color] * len(valid_positions)
+                circle_radius = DRAW_CONFIG[config_key]['landmark']['circle_radius'] * 2
                 
-                # Draw each landmark individually with depth-based size
-                for i, (pos, depth) in enumerate(zip(visible_landmarks, visible_depths)):
-                    # Calculate size based on depth (closer = larger)
-                    # Normalize depth to 0-1 range
-                    if depth_range > 0.01:
-                        normalized_depth = (depth - min_depth) / depth_range
-                    else:
-                        normalized_depth = 0.5
-                    
-                    # Invert so closer (LOWER/more negative z) = larger size
-                    # MediaPipe: more negative z = further away, less negative/positive = closer
-                    size_scale = 1.0 - normalized_depth  # INVERTED: 1 = furthest (small), 0 = closest (large)
-                    
-                    # Size range: 5-10 pixels (closer = 10px, further = 5px)
-                    dot_size = 5.0 + (size_scale * 5.0)
-                    
-                    if i == 0:  # Debug first landmark
-                        print(f"DEBUG: Landmark 0 - depth: {depth:.3f}, normalized: {normalized_depth:.3f}, size: {dot_size:.1f}px")
-                    
-                    # Create a small circle for each point (simulate round point)
-                    # Draw multiple circles with decreasing alpha for smooth appearance
-                    for layer in range(3):
-                        layer_size = dot_size - (layer * 2)
-                        if layer_size > 0:
-                            batch = batch_for_shader(shader, 'POINTS', {
-                                "pos": [pos],
-                                "color": [(0.0, 1.0, 0.0, 1.0 - (layer * 0.2))]  # Green with fade
-                            })
-                            gpu.state.point_size_set(layer_size)
-                            shader.bind()
-                            batch.draw(shader)
-                
+                batch = batch_for_shader(shader, 'POINTS', {
+                    "pos": valid_positions,
+                    "color": colors
+                })
+                gpu.state.point_size_set(circle_radius)
+                batch.draw(shader)
                 gpu.state.blend_set('NONE')
         
     except Exception as e:
         logger = get_logger()
-        logger.error(f"Failed to draw landmarks: {str(e)}")
+        logger.error(f"Failed to draw hand landmarks: {str(e)}")
+
+
+def draw_face_landmarks_2d():
+    """Draw MediaPipe face landmarks as 2D overlay (optimized for 468 landmarks)."""
+    global _current_face_landmarks, _camera_texture
+    
+    if _current_face_landmarks is None:
+        return
+    
+    try:
+        from ..runtime.dependency_check import safe_import_mediapipe
+        mp = safe_import_mediapipe()
+        if mp is None:
+            return
+        
+        from ..runtime.trackers import DRAW_CONFIG
+        
+        # Get viewport dimensions
+        if _camera_texture and 'width' in _camera_texture and 'height' in _camera_texture:
+            cam_width = _camera_texture['width']
+            cam_height = _camera_texture['height']
+            aspect_ratio = cam_width / cam_height if cam_height > 0 else 4/3
+        else:
+            aspect_ratio = 4 / 3
+        
+        feed_height = 240
+        feed_width = int(feed_height * aspect_ratio)
+        margin = 10
+        
+        # Pre-calculate face mesh connections once (only get contours for performance)
+        # FACEMESH_TESSELATION has too many connections, use FACEMESH_CONTOURS instead
+        try:
+            face_connections = mp.solutions.face_mesh.FACEMESH_CONTOURS
+        except:
+            # Fallback to tesselation if contours not available
+            face_connections = mp.solutions.face_mesh.FACEMESH_TESSELATION
+        
+        # Draw each face
+        for face_landmarks in _current_face_landmarks:
+            # Convert all landmarks in one pass
+            landmark_positions = []
+            try:
+                for landmark in face_landmarks.landmark:
+                    x = margin + (landmark.x * feed_width)
+                    y = margin + ((1.0 - landmark.y) * feed_height)
+                    # Only add if within bounds
+                    if margin <= x <= margin + feed_width and margin <= y <= margin + feed_height:
+                        landmark_positions.append((x, y))
+                    else:
+                        landmark_positions.append(None)
+            except (TypeError, AttributeError):
+                continue
+            
+            if not any(landmark_positions):
+                continue
+            
+            # Draw face mesh connections in one batch
+            line_vertices = []
+            for connection in face_connections:
+                idx1, idx2 = connection[0], connection[1]
+                if (idx1 < len(landmark_positions) and idx2 < len(landmark_positions) and
+                    landmark_positions[idx1] is not None and landmark_positions[idx2] is not None):
+                    line_vertices.append(landmark_positions[idx1])
+                    line_vertices.append(landmark_positions[idx2])
+            
+            if line_vertices:
+                shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+                batch = batch_for_shader(shader, 'LINES', {"pos": line_vertices})
+                gpu.state.blend_set('ALPHA')
+                gpu.state.line_width_set(1)  # Thin lines for face
+                shader.bind()
+                color = tuple(c / 255.0 for c in DRAW_CONFIG['face']['connection']['color']) + (0.3,)  # More transparent
+                shader.uniform_float("color", color)
+                batch.draw(shader)
+                gpu.state.blend_set('NONE')
+            
+            # Skip drawing individual face landmarks (468 points is too much)
+            # Only draw connections for performance
+        
+    except Exception as e:
+        logger = get_logger()
+        logger.error(f"Failed to draw face landmarks: {str(e)}")
 
 
 def draw_callback():
@@ -310,8 +487,10 @@ def draw_callback():
         # Draw camera feed
         draw_camera_feed()
         
-        # Draw landmarks overlay
-        draw_landmarks_2d()
+        # Draw all landmark overlays
+        draw_pose_landmarks_2d()
+        draw_hand_landmarks_2d()
+        draw_face_landmarks_2d()
         
     except Exception as e:
         logger = get_logger()
@@ -348,7 +527,8 @@ def register_draw_handler():
 
 def unregister_draw_handler():
     """Unregister the draw handler."""
-    global _draw_handler, _camera_texture, _current_frame, _current_landmarks
+    global _draw_handler, _camera_texture, _current_frame
+    global _current_pose_landmarks, _current_hand_landmarks, _current_face_landmarks
     
     if _draw_handler is not None:
         try:
@@ -365,7 +545,9 @@ def unregister_draw_handler():
     # Cleanup
     _camera_texture = None
     _current_frame = None
-    _current_landmarks = None
+    _current_pose_landmarks = None
+    _current_hand_landmarks = None
+    _current_face_landmarks = None
 
 
 def is_draw_handler_active():

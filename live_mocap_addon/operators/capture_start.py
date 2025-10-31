@@ -90,7 +90,10 @@ class MOCAP_OT_CaptureStart(Operator):
             use_pose=settings.use_pose,
             use_hands=settings.use_hands,
             use_face=settings.use_face,
-            min_confidence=settings.min_confidence
+            min_confidence=settings.mp_min_detection_confidence,
+            model_complexity=int(settings.mp_model_complexity),
+            min_tracking_confidence=settings.mp_min_tracking_confidence,
+            smooth_landmarks=True
         )
         
         if not self._trackers.initialize():
@@ -155,12 +158,16 @@ class MOCAP_OT_CaptureStart(Operator):
             # Process with MediaPipe
             landmarks_result = self._trackers.process_frame(frame_rgb)
             
+            # Update viewport with all landmarks if enabled
+            if settings.show_camera_feed:
+                viewport_draw.update_landmarks(
+                    pose_landmarks=landmarks_result.pose_landmarks,
+                    hand_landmarks=landmarks_result.hand_landmarks,
+                    face_landmarks=landmarks_result.face_landmarks
+                )
+            
             # Retarget if we have pose landmarks
             if landmarks_result.pose_landmarks:
-                # Update viewport with landmarks if enabled
-                if settings.show_camera_feed:
-                    viewport_draw.update_landmarks(landmarks_result.pose_landmarks)
-                
                 self.retarget_pose(context, landmarks_result.pose_landmarks)
             
             # Force viewport redraw if camera feed is enabled
