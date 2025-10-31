@@ -113,6 +113,9 @@ class MOCAP_PT_MainPanel(Panel):
         row = box.row()
         row.prop(settings, "target_fps")
         
+        row = box.row()
+        row.prop(settings, "show_camera_feed")
+        
         row = box.row(align=True)
         row.prop(settings, "use_pose", toggle=True)
         row.prop(settings, "use_hands", toggle=True)

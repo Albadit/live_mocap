@@ -12,6 +12,7 @@ from ..runtime.retarget import (
 from ..runtime.mapping import get_next_landmark_in_chain
 from ..runtime.filters import MultiFilter
 from ..runtime import dependency_check
+from ..runtime import viewport_draw
 
 
 class MOCAP_OT_CaptureStart(Operator):
@@ -107,6 +108,19 @@ class MOCAP_OT_CaptureStart(Operator):
                     foot_lock_threshold=settings.foot_lock_threshold
                 )
         
+        # Register viewport draw handler if enabled
+        if settings.show_camera_feed:
+            print(f"INFO: show_camera_feed is True, registering draw handler...")
+            viewport_draw.register_draw_handler()
+            
+            # Create camera texture for viewport
+            width, height = self._camera.get_resolution()
+            print(f"INFO: Camera resolution: {width}x{height}")
+            if width > 0 and height > 0:
+                viewport_draw.create_camera_texture(width, height)
+        else:
+            print(f"INFO: show_camera_feed is False, skipping draw handler")
+        
         # Setup
         settings.is_capturing = True
         settings.status_message = "Capturing..."
@@ -134,12 +148,26 @@ class MOCAP_OT_CaptureStart(Operator):
             
             success, frame, frame_rgb = frame_result
             
+            # Update viewport with camera frame if enabled
+            if settings.show_camera_feed:
+                viewport_draw.update_camera_frame(frame)
+            
             # Process with MediaPipe
             landmarks_result = self._trackers.process_frame(frame_rgb)
             
             # Retarget if we have pose landmarks
             if landmarks_result.pose_landmarks:
+                # Update viewport with landmarks if enabled
+                if settings.show_camera_feed:
+                    viewport_draw.update_landmarks(landmarks_result.pose_landmarks)
+                
                 self.retarget_pose(context, landmarks_result.pose_landmarks)
+            
+            # Force viewport redraw if camera feed is enabled
+            if settings.show_camera_feed:
+                for area in context.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
             
             # Update status
             fps = self._camera.get_average_fps()
@@ -255,6 +283,14 @@ class MOCAP_OT_CaptureStart(Operator):
         if self._trackers:
             self._trackers.cleanup()
             self._trackers = None
+        
+        # Unregister viewport draw handler
+        viewport_draw.unregister_draw_handler()
+        
+        # Force viewport redraw
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
         
         # Update status
         settings.is_capturing = False

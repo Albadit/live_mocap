@@ -24,6 +24,7 @@ from . import zero_pose
 from . import apply_rest_offset
 from . import show_help
 from . import install_dependencies
+from . import toggle_camera_feed
 
 if first_startup:
     pass
@@ -47,3 +48,4 @@ else:
     importlib.reload(apply_rest_offset)
     importlib.reload(show_help)
     importlib.reload(install_dependencies)
+    importlib.reload(toggle_camera_feed)

@@ -10,6 +10,7 @@ from . import retarget
 from . import mapping
 from . import recording
 from . import filters
+from . import viewport_draw
 
 
 def initialize():
@@ -19,7 +20,8 @@ def initialize():
 
 def cleanup():
     """Cleanup runtime systems."""
-    pass
+    # Cleanup viewport drawing
+    viewport_draw.unregister_draw_handler()
 
 
 __all__ = [
@@ -31,6 +33,7 @@ __all__ = [
     'mapping',
     'recording',
     'filters',
+    'viewport_draw',
     'initialize',
     'cleanup'
 ]

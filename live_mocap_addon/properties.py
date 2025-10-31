@@ -116,6 +116,12 @@ class MOCAP_PG_Settings(PropertyGroup):
         max=120
     )
     
+    show_camera_feed: BoolProperty(
+        name="Show Camera Feed",
+        description="Display camera feed and landmarks in 3D Viewport",
+        default=True
+    )
+    
     use_pose: BoolProperty(
         name="Use Pose",
         description="Enable pose tracking (body landmarks)",

@@ -9,7 +9,7 @@ Main add-on entry point - Blender loads this file directly.
 # Important plugin info for Blender
 bl_info = {
     "name": "Live Mocap",
-    "author": "AI Assistant",
+    "author": "Albadit",
     "version": (1, 0, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > Mocap",
@@ -83,6 +83,7 @@ classes_operators = [
     operators.apply_rest_offset.MOCAP_OT_ApplyRestOffset,
     operators.show_help.MOCAP_OT_ShowHelp,
     operators.install_dependencies.MOCAP_OT_InstallDependencies,
+    operators.toggle_camera_feed.MOCAP_OT_ToggleCameraFeed,
 ]
 
 classes_preferences = [

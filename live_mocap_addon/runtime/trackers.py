@@ -178,6 +178,26 @@ POSE_LANDMARK_NAMES = {
     31: "LEFT_FOOT_INDEX", 32: "RIGHT_FOOT_INDEX",
 }
 
+# MediaPipe pose connections (bones)
+POSE_CONNECTIONS = [
+    # Face
+    (0, 1), (1, 2), (2, 3), (3, 7),  # Left eye to ear
+    (0, 4), (4, 5), (5, 6), (6, 8),  # Right eye to ear
+    (9, 10),  # Mouth
+    # Shoulders
+    (11, 12),  # Shoulder line
+    # Left arm
+    (11, 13), (13, 15), (15, 17), (15, 19), (15, 21),
+    # Right arm
+    (12, 14), (14, 16), (16, 18), (16, 20), (16, 22),
+    # Torso
+    (11, 23), (12, 24), (23, 24),  # Hip line
+    # Left leg
+    (23, 25), (25, 27), (27, 29), (27, 31),
+    # Right leg
+    (24, 26), (26, 28), (28, 30), (28, 32),
+]
+
 
 def get_landmark_name(index: int) -> str:
     """Get landmark name from index."""
