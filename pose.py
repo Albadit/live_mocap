@@ -1,11 +1,12 @@
 # Install dependencies
-# For GPU support, you'll also need: pip install mediapipe-gpu
-# !pip install opencv-python mediapipe
+# For AMD GPU on Windows: pip install tensorflow-directml
+# For CPU-only: pip install opencv-python mediapipe
 
 # Import required libraries
 import mediapipe as mp
 import cv2
 import sys
+import platform
 
 mp_drawing = mp.solutions.drawing_utils # Drawing helpers
 mp_holistic = mp.solutions.holistic # Mediapipe Solutions
@@ -14,8 +15,9 @@ mp_holistic = mp.solutions.holistic # Mediapipe Solutions
 # GPU/CPU CONFIGURATION
 # ============================================================================
 PROCESSING_CONFIG = {
-    'use_gpu': False,  # Set to True to use GPU, False for CPU
-    'gpu_device': 0    # GPU device ID (if multiple GPUs available)
+    'use_gpu': False,      # Set to True to attempt GPU acceleration
+    'gpu_backend': 'auto',  # Options: 'auto', 'directml', 'opencl', 'cpu'
+    'verbose': True         # Print detailed GPU setup information
 }
 
 # Unified drawing configuration
@@ -75,50 +77,127 @@ CAMERA_CONFIG = {
 }
 
 
+def detect_gpu_backend():
+    """
+    Detect available GPU backends for the system.
+    Returns tuple: (backend_name, backend_available)
+    """
+    system = platform.system()
+    detected_backends = []
+    
+    # Check for DirectML (Windows + AMD/Intel GPUs)
+    if system == "Windows":
+        try:
+            import tensorflow_directml as tfdml
+            detected_backends.append('directml')
+            if PROCESSING_CONFIG['verbose']:
+                print("✓ DirectML detected (AMD/Intel GPU support)")
+        except ImportError:
+            if PROCESSING_CONFIG['verbose']:
+                print("✗ DirectML not found (install: pip install tensorflow-directml)")
+    
+    # Check for standard TensorFlow with CUDA (NVIDIA GPUs)
+    try:
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            detected_backends.append('cuda')
+            if PROCESSING_CONFIG['verbose']:
+                print(f"✓ CUDA detected - {len(gpus)} NVIDIA GPU(s) found")
+        elif PROCESSING_CONFIG['verbose']:
+            print("✗ No CUDA GPUs found")
+    except ImportError:
+        if PROCESSING_CONFIG['verbose']:
+            print("✗ TensorFlow not found")
+    except Exception as e:
+        if PROCESSING_CONFIG['verbose']:
+            print(f"✗ TensorFlow GPU check failed: {e}")
+    
+    return detected_backends
+
+
 def setup_gpu_environment():
     """
-    Configure GPU settings for MediaPipe.
-    Returns True if GPU setup successful, False otherwise.
+    Configure GPU settings for MediaPipe with support for AMD GPUs.
+    Returns: (backend_name, success_status)
     """
     if not PROCESSING_CONFIG['use_gpu']:
-        print("Running on CPU")
-        return False
+        if PROCESSING_CONFIG['verbose']:
+            print("\n[CPU MODE] - GPU acceleration disabled")
+        return 'cpu', True
     
-    try:
-        # Try to import TensorFlow to check GPU availability
-        import tensorflow as tf
-        
-        # List available GPUs
-        gpus = tf.config.list_physical_devices('GPU')
-        
-        if not gpus:
-            print("WARNING: GPU requested but no GPU devices found. Falling back to CPU.")
-            return False
-        
-        print(f"Found {len(gpus)} GPU(s):")
-        for gpu in gpus:
-            print(f"  - {gpu.name}")
-        
-        # Configure GPU memory growth to avoid allocating all GPU memory at once
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        
-        # Set specific GPU device if specified
-        if PROCESSING_CONFIG['gpu_device'] < len(gpus):
-            tf.config.set_visible_devices(gpus[PROCESSING_CONFIG['gpu_device']], 'GPU')
-            print(f"Using GPU device {PROCESSING_CONFIG['gpu_device']}")
-        
-        print("GPU setup successful")
-        return True
-        
-    except ImportError:
-        print("WARNING: TensorFlow not found. GPU acceleration requires TensorFlow.")
-        print("Install with: pip install tensorflow")
-        return False
-    except Exception as e:
-        print(f"WARNING: GPU setup failed: {e}")
-        print("Falling back to CPU")
-        return False
+    system = platform.system()
+    backend = PROCESSING_CONFIG['gpu_backend']
+    
+    print("\n" + "="*60)
+    print("GPU SETUP")
+    print("="*60)
+    print(f"System: {system}")
+    print(f"Requested backend: {backend}")
+    print()
+    
+    # Detect available backends
+    available_backends = detect_gpu_backend()
+    
+    if not available_backends:
+        print("\n⚠ WARNING: No GPU backends detected")
+        print("Falling back to CPU mode")
+        print("\nFor AMD GPU support on Windows, install:")
+        print("  pip install tensorflow-directml")
+        return 'cpu', False
+    
+    print(f"\nAvailable backends: {', '.join(available_backends)}")
+    
+    # Auto-select best backend
+    if backend == 'auto':
+        if 'directml' in available_backends:
+            backend = 'directml'
+        elif 'cuda' in available_backends:
+            backend = 'cuda'
+        else:
+            backend = 'cpu'
+        print(f"Auto-selected: {backend}")
+    
+    # Setup DirectML (AMD/Intel GPUs on Windows)
+    if backend == 'directml':
+        try:
+            import tensorflow_directml as tfdml
+            # Note: DirectML plugin automatically handles device selection
+            print("\n✓ DirectML initialized successfully")
+            print("  Compatible with: AMD Radeon, Intel Iris GPUs")
+            return 'directml', True
+        except Exception as e:
+            print(f"\n✗ DirectML setup failed: {e}")
+            print("Falling back to CPU")
+            return 'cpu', False
+    
+    # Setup CUDA (NVIDIA GPUs)
+    elif backend == 'cuda':
+        try:
+            import tensorflow as tf
+            gpus = tf.config.list_physical_devices('GPU')
+            
+            if not gpus:
+                print("\n✗ No CUDA GPUs found")
+                return 'cpu', False
+            
+            # Configure GPU memory growth
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            
+            print(f"\n✓ CUDA initialized successfully")
+            print(f"  Using {len(gpus)} NVIDIA GPU(s)")
+            for i, gpu in enumerate(gpus):
+                print(f"    GPU {i}: {gpu.name}")
+            return 'cuda', True
+            
+        except Exception as e:
+            print(f"\n✗ CUDA setup failed: {e}")
+            return 'cpu', False
+    
+    # CPU fallback
+    print("\n[CPU MODE]")
+    return 'cpu', True
 
 
 def draw_pose(image, results, mp_holistic, mp_drawing):
@@ -293,10 +372,13 @@ def draw_hand(image, results_landmarks, mp_holistic, mp_drawing, hand_type='righ
 
 def main():
     """
-    Main function to run pose detection with GPU/CPU support.
+    Main function to run pose detection with AMD/NVIDIA GPU or CPU support.
     """
-    # Setup GPU environment if requested
-    gpu_available = setup_gpu_environment()
+    # Setup GPU environment
+    backend, gpu_success = setup_gpu_environment()
+    
+    print("="*60)
+    print()
     
     # Initialize video capture
     cap = cv2.VideoCapture(0)
@@ -308,19 +390,21 @@ def main():
     if 'height' in CAMERA_CONFIG:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_CONFIG['height'])
     
-    # Verify actual FPS (some cameras may not support requested FPS)
+    # Verify actual FPS
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"\nCamera Configuration:")
-    print(f"Requested FPS: {CAMERA_CONFIG['fps']}")
-    print(f"Actual FPS: {actual_fps}")
-    print(f"Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-    print(f"Processing Mode: {'GPU' if PROCESSING_CONFIG['use_gpu'] and gpu_available else 'CPU'}")
-    print("\nPress 'q' to quit\n")
+    print("Camera Configuration:")
+    print(f"  Requested FPS: {CAMERA_CONFIG['fps']}")
+    print(f"  Actual FPS: {actual_fps}")
+    print(f"  Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+    print(f"  Processing Backend: {backend.upper()}")
+    print()
+    print("="*60)
+    print()
     
-    # Calculate wait time for display (in milliseconds)
+    # Calculate wait time for display
     wait_time = max(1, int(1000 / CAMERA_CONFIG['fps']))
     
-    # Initiate holistic model with configuration variables
+    # Initiate holistic model
     with mp_holistic.Holistic(
         min_detection_confidence=MODEL_CONFIG['min_detection_confidence'],
         min_tracking_confidence=MODEL_CONFIG['min_tracking_confidence'],
@@ -349,28 +433,20 @@ def main():
             image.flags.writeable = True   
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             
-            # Draw landmarks using custom functions that respect disabled landmarks
-            # 1. Draw face landmarks
+            # Draw landmarks
             image = draw_face(image, results, mp_holistic, mp_drawing)
-            
-            # 2. Right hand
             image = draw_hand(image, results.right_hand_landmarks, mp_holistic, mp_drawing, 'right')
-    
-            # 3. Left Hand
             image = draw_hand(image, results.left_hand_landmarks, mp_holistic, mp_drawing, 'left')
-    
-            # 4. Pose Detections with Dynamic Depth-based Size
             image = draw_pose(image, results, mp_holistic, mp_drawing)
             
-            # Add processing mode indicator on frame
-            mode_text = f"Mode: {'GPU' if PROCESSING_CONFIG['use_gpu'] and gpu_available else 'CPU'}"
-            cv2.putText(image, mode_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+            # Add backend indicator on frame
+            backend_text = f"Backend: {backend.upper()}"
+            cv2.putText(image, backend_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
                        0.7, (0, 255, 0), 2, cv2.LINE_AA)
                             
-            cv2.imshow('MediaPipe Holistic', image)
+            cv2.imshow('MediaPipe Pose Detection', image)
     
-            # Calculate wait time based on target FPS (waitKey expects milliseconds)
-            if cv2.waitKey(wait_time) & 0xFF == ord('q'):
+            if cv2.waitKey(wait_time) & 0xFF == 27:
                 break
             
             frame_count += 1
@@ -378,6 +454,7 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
     print(f"\nProcessed {frame_count} frames")
+    print(f"Backend used: {backend.upper()}")
 
 
 if __name__ == "__main__":
